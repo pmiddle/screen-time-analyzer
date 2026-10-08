@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Screen Time Analyzer</title>
+<style>
+:root{--bg:#fafaf8;--fg:#1d1d1b;--card:#fff;--line:#ddd9d0;--acc:#2f6f5e;--warn:#b25b00;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#151514;--fg:#ecebe6;--card:#1f1f1d;--line:#3a3a36;--acc:#6fc4ab;--warn:#f0a259}}
+:root[data-theme="dark"]{--bg:#151514;--fg:#ecebe6;--card:#1f1f1d;--line:#3a3a36;--acc:#6fc4ab;--warn:#f0a259}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:760px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:1.5rem;margin:0 0 4px}
+p.sub{margin:0 0 16px;opacity:.7;font-size:.95rem}
+textarea{width:100%;min-height:170px;box-sizing:border-box;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--fg);font:inherit;resize:vertical}
+.row{display:flex;gap:8px;margin:10px 0 20px;flex-wrap:wrap}
+button{padding:9px 16px;border-radius:8px;border:1px solid var(--acc);background:var(--acc);color:#fff;font:inherit;cursor:pointer}
+select{padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);font:inherit}
+button.ghost{background:transparent;color:var(--acc)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px}
+.card h2{margin:0 0 8px;font-size:1.05rem}
+.bar{height:8px;border-radius:4px;background:var(--line);margin:4px 0 10px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--acc)}
+.summary{font-size:1.02rem}
+.warn{color:var(--warn);font-size:.92rem}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.9rem}
+td,th{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+</style>
+</head>
+<body>
+<main>
+<h1>Screen Time Analyzer</h1>
+<p class="sub">Paste entries in the form: <b>App Date Time Reason Duration</b>. English or Chinese both work (e.g. <code>10min</code>, <code>10分钟</code>, <code>1小时30分</code>, <code>半小时</code>). One entry per line works best.</p>
+<textarea id="in" placeholder="Youtube Oct 5, 2026 at 6:01 PM Study 10min&#10;Threads Oct 6, 2026 at 6:30 PM Just for fun 15min"></textarea>
+<div class="row">
+  <button id="go">Analyze</button>
+  <button class="ghost" id="ex">Load example</button>
+  <button class="ghost" id="clr">Clear</button>
+  <select id="lang" aria-label="Output language"><option value="auto">Output: Auto</option><option value="en">Output: English</option><option value="zh">输出：中文</option></select>
+</div>
+<div id="out"></div>
+</main>
+<script>
+const MONTHS={jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8,oct:9,nov:10,dec:11};
+const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const EN=/(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s*(\d{1,2}),?\s+(\d{4})(?:\s+at)?\s+(\d{1,2}):(\d{2})\s*([AaPp][Mm])?/gi;
+const ZH=/(\d{4})\s*[年\/.\-]\s*(\d{1,2})\s*[月\/.\-]\s*(\d{1,2})\s*[日号號]?(?:\s*(上午|下午|早上|早晨|晚上|中午|凌晨|AM|PM|am|pm)?\s*(\d{1,2})\s*(?:[:：]|点|點|时|時)\s*(\d{1,2})?\s*(?:分(?!钟|鐘))?\s*([AaPp][Mm])?)?/g;
+const DUR=/(\d+(?:\.\d+)?)\s*(?:(个小时|個小時|个钟头|小时|小時|钟头|鐘頭|分钟|分鐘|分|秒钟|秒鐘|秒)|((?:hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![A-Za-z])))/gi;
+const HALF=/([一两兩]|\d+)?\s*(?:个|個)?半\s*(?:个|個)?(?:小时|小時|钟头|鐘頭)/g;
+
+function mk(y,mo,d,h,mi,per){
+  per=(per||'').toLowerCase();
+  if((per==='pm'||per==='下午'||per==='晚上')&&h<12)h+=12;
+  else if(per==='中午'&&h<11)h+=12;
+  else if((per==='am'||per==='凌晨')&&h===12)h=0;
+  return new Date(y,mo,d,h,mi);
+}
+function findAnchors(text){
+  const a=[];let m;
+  EN.lastIndex=0;
+  while((m=EN.exec(text))){
+    const mo=MONTHS[m[1].slice(0,3).toLowerCase()];if(mo===undefined)continue;
+    a.push({start:m.index,end:m.index+m[0].length,date:mk(+m[3],mo,+m[2],+m[4],+m[5],m[6])});
+  }
+  ZH.lastIndex=0;
+  while((m=ZH.exec(text))){
+    a.push({start:m.index,end:m.index+m[0].length,date:mk(+m[1],+m[2]-1,+m[3],m[5]===undefined?0:+m[5],m[6]?+m[6]:0,m[4]||m[7])});
+  }
+  a.sort((x,y)=>x.start-y.start);
+  const out=[];
+  for(const x of a){if(!out.length||x.start>=out[out.length-1].end)out.push(x)}
+  return out;
+}
+function unitMin(n,u){
+  u=u.toLowerCase();
+  if(/^(h|小|个|個|钟|鐘)/.test(u))return n*60;
+  if(/^(s|秒)/.test(u))return n/60;
+  return n;
+}
+const CN={'一':1,'两':2,'兩':2};
+function parse(text){
+  const anchors=findAnchors(text);
+  const entries=[];
+  anchors.forEach((a,i)=>{
+    const app=i===0?text.slice(0,a.start).trim().split(/\n/).pop().trim():a.appNext;
+    const next=anchors[i+1];
+    let gap=text.slice(a.end,next?next.start:text.length);
+    if(next){
+      const nl=gap.lastIndexOf('\n');
+      if(nl>=0){next.appNext=gap.slice(nl+1).trim();gap=gap.slice(0,nl)}
+      else{
+        const t=gap.trimEnd();let end=-1,mm;
+        for(const R of [DUR,HALF]){const re=new RegExp(R.source,'gi');while((mm=re.exec(t)))end=Math.max(end,mm.index+mm[0].length)}
+        const rest=end>=0?t.slice(end).trim():'';
+        if(rest&&!/\s/.test(rest)){next.appNext=rest;gap=t.slice(0,end)}
+        else{const sp=t.search(/\S+$/);next.appNext=t.slice(sp);gap=t.slice(0,sp)}
+      }
+    }
+    let dur=0,found=false;
+    gap=gap.replace(HALF,(all,n)=>{found=true;dur+=(n?(CN[n]||+n):0)*60+30;return ' '});
+    gap=gap.replace(DUR,(all,n,u1,u2)=>{found=true;dur+=unitMin(+n,u1||u2);return ' '});
+    const reason=gap.replace(/\s+/g,' ').replace(/^[\s,，。:：;；\-–—]+|[\s,，。:：;；\-–—]+$/g,'')||'(no reason)';
+    entries.push({app:app||'(unknown app)',date:a.date,reason,dur,hasDur:found});
+  });
+  return entries;
+}
+function fmt(min,zh){
+  const t=Math.round(min*60),h=Math.floor(t/3600),m=Math.floor(t%3600/60),sc=t%60;
+  const p=[];
+  if(h)p.push(zh?h+'小时':h+' h');
+  if(m)p.push(zh?m+'分钟':m+' min');
+  if(sc)p.push(zh?sc+'秒':sc+' sec');
+  return p.length?p.join(zh?'':' '):(zh?'0分钟':'0 min');
+}
+function fmtDate(d,zh){return zh?`${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`:`${MN[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`}
+function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+function analyze(){
+  const out=document.getElementById('out');
+  const text=document.getElementById('in').value;
+  const sel=document.getElementById('lang').value;
+  const zh=sel==='zh'||(sel==='auto'&&/[\u4e00-\u9fff]/.test(text));
+  const entries=parse(text);
+  if(!entries.length){out.innerHTML=`<p class="warn">${zh?'没有找到记录。每条记录需要包含日期和时间，例如“2026年10月5日 下午6:01”或“Oct 5, 2026 at 6:01 PM”。':'No entries found. Each entry needs a date and time like "Oct 5, 2026 at 6:01 PM" or "2026年10月5日 下午6:01".'}</p>`;return}
+  const apps=new Map();
+  for(const e of entries){
+    const ak=e.app.toLowerCase();
+    if(!apps.has(ak))apps.set(ak,{name:e.app,total:0,reasons:new Map()});
+    const a=apps.get(ak);a.total+=e.dur;
+    const rk=e.reason.toLowerCase();
+    if(!a.reasons.has(rk))a.reasons.set(rk,{name:e.reason,min:0});
+    a.reasons.get(rk).min+=e.dur;
+  }
+  const dates=entries.map(e=>e.date);
+  const lo=new Date(Math.min(...dates)),hi=new Date(Math.max(...dates));
+  const same=fmtDate(lo,zh)===fmtDate(hi,zh);
+  const sorted=[...apps.values()].sort((a,b)=>b.total-a.total);
+  const total=sorted.reduce((s,a)=>s+a.total,0);
+  const missing=entries.filter(e=>!e.hasDur);
+  const n=sorted.length;
+
+  let html=`<div class="card summary"><h2>${zh?'总结':'Summary'}</h2>`;
+  if(zh){
+    html+=`<p>${same?'在 '+fmtDate(lo,true):'从 '+fmtDate(lo,true)+' 到 '+fmtDate(hi,true)}，你共使用了 ${n} 个应用，总计 <b>${fmt(total,true)}</b>。</p>`;
+  }else{
+    html+=`<p>${same?'On '+fmtDate(lo):'From '+fmtDate(lo)+' to '+fmtDate(hi)}, you spent a total of <b>${fmt(total)}</b> across ${n} app${n>1?'s':''}.</p>`;
+  }
+  for(const a of sorted){
+    const rs=[...a.reasons.values()].sort((x,y)=>y.min-x.min);
+    if(zh){
+      html+=`<p>你在 ${esc(a.name)} 上总共花了 <b>${fmt(a.total,true)}</b>，其中 ${rs.map(r=>`${fmt(r.min,true)}用于${esc(r.name)}`).join('，')}。</p>`;
+    }else{
+      const l=rs.map(r=>`${fmt(r.min)} because of ${esc(r.name.toLowerCase())}`);
+      const list=l.length>1?l.slice(0,-1).join(', ')+' and '+l[l.length-1]:l[0];
+      html+=`<p>You spent a total of <b>${fmt(a.total)}</b> on ${esc(a.name)}, with ${list}.</p>`;
+    }
+  }
+  html+='</div>';
+  if(missing.length){
+    const names=missing.map(e=>esc(e.app)+' ('+esc(e.reason)+')').join(zh?'、':', ');
+    html+=`<div class="card"><p class="warn">${zh?`有 ${missing.length} 条记录没有时长，已按 0 分钟计算：${names}。请补上时长，例如“20分钟”。`:`${missing.length} entr${missing.length>1?'ies have':'y has'} no duration and counted as 0 min: ${names}. Add a duration like "20min" or "20分钟" to include ${missing.length>1?'them':'it'}.`}</p></div>`;
+  }
+  for(const a of sorted){
+    html+=`<div class="card"><h2>${esc(a.name)} &middot; ${fmt(a.total,zh)}</h2>`;
+    for(const r of [...a.reasons.values()].sort((x,y)=>y.min-x.min)){
+      const pct=a.total?r.min/a.total*100:0;
+      html+=`<div>${esc(r.name)} <span style="opacity:.7">&mdash; ${fmt(r.min,zh)} (${Math.round(pct)}%)</span></div><div class="bar"><i style="width:${pct}%"></i></div>`;
+    }
+    html+='</div>';
+  }
+  const H=zh?['应用','时间','原因','时长','解析结果']:['App','Date','Reason','Duration','Parsed entries'];
+  html+=`<div class="card"><h2>${H[4]}</h2><div class="scroll"><table><tr><th>${H[0]}</th><th>${H[1]}</th><th>${H[2]}</th><th>${H[3]}</th></tr>${entries.map(e=>`<tr><td>${esc(e.app)}</td><td>${fmtDate(e.date,zh)} ${e.date.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</td><td>${esc(e.reason)}</td><td>${e.hasDur?fmt(e.dur,zh):'&mdash;'}</td></tr>`).join('')}</table></div></div>`;
+  out.innerHTML=html;
+}
+document.getElementById('go').onclick=analyze;
+document.getElementById('lang').onchange=analyze;
+document.getElementById('clr').onclick=()=>{document.getElementById('in').value='';document.getElementById('out').innerHTML=''};
+document.getElementById('ex').onclick=()=>{
+  document.getElementById('in').value='Youtube Oct 5, 2026 at 6:01 PM Study 10min\nThreads Oct 6, 2026 at 6:30 PM Just for fun 15分钟\nYoutube Oct 6, 2026 10:00PM Study 30分钟\nThreads Oct 6, 2026 11:00 PM Chatting with friends 半小时\n抖音 2026年10月6日 晚上8:15 放松 1小时20分钟';
+  analyze();
+};
+</script>
+</body>
+</html>
